@@ -139,3 +139,84 @@ class DataExtractor:
             return results
 
         return results
+    def extract_links(self):
+            links = []
+            
+            if isinstance(self.loader, pdfplumber.PDF):
+                for i, page in enumerate(self.loader.pages):
+                    if hasattr(page, 'annots') and page.annots:
+                        for annot in page.annots:
+                            uri = annot.get("uri")
+                            if uri:
+                                links.append((i + 1, uri))
+            
+            elif isinstance(self.loader, DocxDocument):
+                for para in self.loader.paragraphs:
+                    for rel in self.loader.part.rels.values():
+                        if "hyperlink" in rel.reltype:
+                            if para.text and rel.target_ref in para.text:
+                                links.append((1, rel.target_ref))
+            
+            elif hasattr(self.loader, "slides"):  # Check if it's a Presentation object
+                for slide_num, slide in enumerate(self.loader.slides):
+                    for shape in slide.shapes:
+                        if shape.has_text_frame:
+                            for paragraph in shape.text_frame.paragraphs:
+                                for run in paragraph.runs:
+                                    if run.hyperlink and run.hyperlink.address:
+                                        links.append((slide_num + 1, run.hyperlink.address))
+            
+            return links
+
+    def extract_images(self):
+        images = []
+        
+        if self.file_path.endswith(".pdf"):
+            doc = fitz.open(self.file_path)
+            for page_num in range(len(doc)):
+                for img_index, img in enumerate(doc[page_num].get_images(full=True)):
+                    xref = img[0]
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    img_obj = Image.open(BytesIO(image_bytes))
+                    images.append((page_num + 1, "PNG", img_obj.size, img_obj))
+        
+        elif self.file_path.endswith(".docx"):
+            for i, rel in enumerate(self.loader.part.rels):
+                if "image" in self.loader.part.rels[rel].target_ref:
+                    image_data = self.loader.part.rels[rel].target_part.blob
+                    img_obj = Image.open(BytesIO(image_data))
+                    images.append((i + 1, "PNG", img_obj.size, img_obj))
+        
+        elif self.file_path.endswith(".pptx"):
+            for slide_num, slide in enumerate(self.loader.slides):
+                for shape in slide.shapes:
+                    if shape.shape_type == 13:  # Picture shape type
+                        image = shape.image
+                        img_obj = Image.open(BytesIO(image.blob))
+                        images.append((slide_num + 1, "PNG", img_obj.size, img_obj))
+        
+        return images
+
+    def extract_tables(self):
+        tables = []
+        if isinstance(self.loader, pdfplumber.PDF):
+            for i, page in enumerate(self.loader.pages):
+                extracted_tables = page.extract_tables()
+                for table in extracted_tables:
+                    tables.append((i + 1, len(table), len(table[0]) if table else 0, table))
+        
+        elif isinstance(self.loader, DocxDocument):
+            for i, table in enumerate(self.loader.tables):
+                extracted_table = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+                tables.append((i + 1, len(extracted_table), len(extracted_table[0]) if extracted_table else 0, extracted_table))
+        
+        elif hasattr(self.loader, "slides"):  # Check if it's a Presentation object
+            for slide_num, slide in enumerate(self.loader.slides):
+                for shape in slide.shapes:
+                    if shape.has_table:
+                        table = shape.table
+                        extracted_table = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+                        tables.append((slide_num + 1, len(extracted_table), len(extracted_table[0]) if extracted_table else 0, extracted_table))
+        
+        return tables
