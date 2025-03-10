@@ -341,5 +341,21 @@ class SQLStorage(Storage):
         conn.commit()
         conn.close()
 
+# Example Usage
+def main():
+    pdf_loader = PDFLoader("/home/shtlp_0096/Desktop/coding/assignment_3_dev/media/test1.pdf")
+    doc_loader = DOCXLoader("/home/shtlp_0096/Desktop/coding/assignment_3_dev/media/demo.docx")
+    ppt_loader = PPTLoader("/home/shtlp_0096/Desktop/coding/assignment_3_dev/media/ppt_test.pptx")
+    extractor_ppt = DataExtractor(ppt_loader)
+    extractor_pdf = DataExtractor(pdf_loader)
+    extractor_doc = DataExtractor(doc_loader)
 
-    
+    for extractor, file_type in zip([extractor_pdf, extractor_doc, extractor_ppt], ["pdf", "doc", "ppt"]):
+        file_storage = FileStorage(extractor)
+        file_storage.save_data(f"output_{file_type}")
+
+        sql_storage = SQLStorage(extractor, host="localhost", user="root", password="shills123", database="document_data")
+        sql_storage.save_data()
+
+if __name__ == "__main__":
+    main()
