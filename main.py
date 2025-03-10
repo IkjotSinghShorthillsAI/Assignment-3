@@ -220,3 +220,126 @@ class DataExtractor:
                         tables.append((slide_num + 1, len(extracted_table), len(extracted_table[0]) if extracted_table else 0, extracted_table))
         
         return tables
+    
+# Abstract Class: Storage
+class Storage(ABC):
+    def __init__(self, extractor):
+        self.extractor = extractor
+
+    @abstractmethod
+    def save_data(self):
+        pass
+
+# Concrete Class: FileStorage
+class FileStorage(Storage):
+    def save_data(self, output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save text data with metadata
+        with open(os.path.join(output_dir, "text_data.txt"), "w", encoding="utf-8") as f:
+            for page_num, text, data_type, font_name, font_size, bold, italic in self.extractor.extract_text():
+                f.write(
+                    f"Page {page_num} - {data_type}: {text} "
+                    f"(Font: {font_name}, Size: {font_size}, Bold: {bold}, Italic: {italic})\n"
+                )
+
+        # Save extracted tables
+        with open(os.path.join(output_dir, "tables.csv"), "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            for page_num, rows, cols, table in self.extractor.extract_tables():
+                writer.writerow([f"Page {page_num} ({rows}x{cols})"])
+                writer.writerows(table)
+
+        # Save images
+        for i, img_format, size, img in self.extractor.extract_images():
+            image_path = os.path.join(output_dir, f"image_{i}.png")
+            img.save(image_path, img_format)
+
+
+# Concrete Class: SQLStorage with font metadata support
+class SQLStorage(Storage):
+    def __init__(self, extractor, host, user, password, database):
+        super().__init__(extractor)
+        self.host = host
+        self.user = user
+        self.password = password
+        self.database = database
+        self._ensure_database_exists()
+
+    def _ensure_database_exists(self):
+        conn = mysql.connector.connect(host=self.host, user=self.user, password=self.password)
+        cursor = conn.cursor()
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self.database}")
+        conn.close()
+
+    def save_data(self):
+        conn = mysql.connector.connect(host=self.host, user=self.user, password=self.password, database=self.database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS extracted_data (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                file_name VARCHAR(255),
+                file_size BIGINT,
+                creation_time DATETIME,
+                modification_time DATETIME,
+                page_number INT,
+                data_type VARCHAR(50),
+                content TEXT,
+                font_name VARCHAR(100),
+                font_size VARCHAR(50),
+                bold BOOLEAN,
+                italic BOOLEAN
+            )
+        """)
+
+        metadata = self.extractor.metadata
+        file_name = self.extractor.file_name
+
+        for page_num, text, data_type, font_name, font_size, bold, italic in self.extractor.extract_text():
+            cursor.execute("""
+                INSERT INTO extracted_data (
+                    file_name, file_size, creation_time, modification_time,
+                    page_number, data_type, content, font_name, font_size, bold, italic
+                )
+                VALUES (
+                    %s, %s, FROM_UNIXTIME(%s), FROM_UNIXTIME(%s),
+                    %s, %s, %s, %s, %s, %s, %s
+                )
+            """, (
+                file_name, metadata["file_size"], metadata["creation_time"], metadata["modification_time"],
+                page_num, data_type, text, font_name, font_size, bold, italic
+            ))
+
+        for page_num, url in self.extractor.extract_links():
+            cursor.execute("""
+                INSERT INTO extracted_data (
+                    file_name, file_size, creation_time, modification_time,
+                    page_number, data_type, content, font_name, font_size, bold, italic
+                )
+                VALUES (
+                    %s, %s, FROM_UNIXTIME(%s), FROM_UNIXTIME(%s),
+                    %s, %s, %s, %s, %s, %s, %s
+                )
+            """, (file_name, metadata["file_size"], metadata["creation_time"],
+                  metadata["modification_time"], page_num, "link", url, "", 0, False, False))
+
+        for page_num, rows, cols, table in self.extractor.extract_tables():
+            table_json = json.dumps(table)
+            cursor.execute("""
+                INSERT INTO extracted_data (
+                    file_name, file_size, creation_time, modification_time,
+                    page_number, data_type, content, font_name, font_size, bold, italic
+                )
+                VALUES (
+                    %s, %s, FROM_UNIXTIME(%s), FROM_UNIXTIME(%s),
+                    %s, %s, %s, %s, %s, %s, %s
+                )
+            """, (file_name, metadata["file_size"], metadata["creation_time"],
+                  metadata["modification_time"], page_num, "table", table_json, "", 0, False, False))
+
+        conn.commit()
+        conn.close()
+
+
+    
